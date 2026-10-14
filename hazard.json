@@ -1,0 +1,32 @@
+{
+  "format": "avsim-studio/1",
+  "params": {
+    "cutT0": 6.5,
+    "cutDur": 4.0,
+    "cutV": 14.0,
+    "pedT0": 11.0,
+    "pedV": 1.35,
+    "busGo": 17.0,
+    "cutDs": -4.0,
+    "tgT": 0.9,
+    "mu": 0.8,
+    "cutGap": 10.0,
+    "cutBrake": 0.0,
+    "pedGap": 4.5,
+    "pedLook": 1,
+    "civil": true
+  },
+  "policy": {},
+  "hazards": [
+    {"type": "ped", "x": 185.0, "side": "S", "v": 2.2, "t0": 0.0, "trig": 36.0}
+  ],
+  "ego": "planner",
+  "world": "town",
+  "space": {
+    "h0_x": [170.0, 205.0],
+    "h0_v": [1.8, 2.4],
+    "h0_trig": [28.0, 44.0]
+  },
+  "exposure": 1.0,
+  "why": "Phạm vi thử nghiệm do người thiết kế xác định, không phải phân phối đã đo ngoài đường. Cảnh được dựng trong chương 10: người đi bộ từ phía nam băng ngang ngoài vạch ở x=185 m, tốc độ 2.2 m/s, bắt đầu khi ego còn cách 36 m. Space quét đoạn x=170..205 m sau vạch chính x=122 m, tốc độ đi nhanh 1.8..2.4 m/s (dưới ngưỡng đi bộ 2.5 m/s của lab), khoảng kích hoạt 28..44 m bao quanh cảnh gốc để kiểm tra cả trường hợp còn thời gian phanh và trường hợp khó. Các biến lấy đều độc lập là thiết kế phép thử, không phải ước lượng hành vi thực. Exposure=1 theo định nghĩa mỗi chuyến stress test 24 giây được cài đúng một thẻ người băng ngang; không phải khẳng định mọi chuyến đi thực đều có người băng ngang. Tần suất mỗi chuyến chỉ có nghĩa cho chiến dịch thử nghiệm này. Muốn chuyển sang đường thật phải đo số lần gặp tình huống trên tổng số chuyến của tuyến/ODD tương ứng rồi thay exposure, đồng thời hiệu chuẩn space bằng quỹ đạo camera."
+}

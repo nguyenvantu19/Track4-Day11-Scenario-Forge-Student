@@ -3,3 +3,5 @@ __pycache__/
 .venv/
 evidence/
 .DS_Store
+.ui_runtime/
+.playwright-mcp/

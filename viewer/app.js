@@ -6,6 +6,21 @@
   var DT = S.DT, T_END = S.T_END, NF = S.NF;
   var REDUCED = window.matchMedia && window.matchMedia("(prefers-reduced-motion: reduce)").matches;
   var $ = function (id) { return document.getElementById(id); };
+  // Presentation quality only: SimCore rollouts and their 0.05 s steps stay intact.
+  var QUALITY = {
+    smooth: { fps: 30, pixels: 800000, dpr: 1, shadow: 0, tube: 24, radial: 6 },
+    balanced: { fps: 30, pixels: 1400000, dpr: 1.25, shadow: 1024, tube: 32, radial: 8 },
+    detail: { fps: 60, pixels: 3000000, dpr: 2, shadow: 2048, tube: 48, radial: 10 }
+  };
+  var quality = "smooth", ready = false, dirty = true, raf = 0;
+  var perf = { frames: 0, cpuMs: 0 };
+  try { var savedQuality = localStorage.getItem("scenario-3d-quality"); if (QUALITY[savedQuality]) quality = savedQuality; } catch (e) {}
+  function invalidate() {
+    dirty = true;
+    if (!ready || document.hidden || raf) return;
+    last = performance.now();
+    raf = requestAnimationFrame(frame);
+  }
   function rng(seed) { var a = seed >>> 0; return function () { a = (a + 0x6D2B79F5) >>> 0; var t = a; t = Math.imul(t ^ (t >>> 15), t | 1); t ^= t + Math.imul(t ^ (t >>> 7), t | 61); return ((t ^ (t >>> 14)) >>> 0) / 4294967296; }; }
   function hash(a, b, c) { var h = Math.imul(a | 0, 374761393) ^ Math.imul(b | 0, 668265263) ^ Math.imul(c | 0, 2246822519); h = Math.imul(h ^ (h >>> 13), 1274126177); return ((h ^ (h >>> 16)) >>> 0) / 4294967296; }
   function gauss(a, b, c) { var u = Math.max(1e-9, hash(a, b, c)), v = hash(a + 7, b + 3, c + 11); return Math.sqrt(-2 * Math.log(u)) * Math.cos(2 * Math.PI * v); }
@@ -27,6 +42,7 @@
     return m;
   }
   function applyPal() {
+    invalidate();
     readPal();
     Object.keys(MATS).forEach(function (k) { MATS[k].forEach(function (m) { m.color.copy(PAL[k]); }); });
     onTheme.forEach(function (f) { f(); });
@@ -36,17 +52,17 @@
   // ================================================================== renderer, scene, lights
   var stage = $("stage"), labels = $("labels");
   var renderer = new T.WebGLRenderer({ antialias: true, preserveDrawingBuffer: false });
-  renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, 2));
-  renderer.shadowMap.enabled = true; renderer.shadowMap.type = T.PCFSoftShadowMap;
+  renderer.shadowMap.enabled = !!QUALITY[quality].shadow; renderer.shadowMap.type = T.PCFSoftShadowMap;
   stage.insertBefore(renderer.domElement, labels);
   var scene = new T.Scene(); scene.background = new T.Color(); scene.fog = new T.Fog(0xffffff, 140, 520);
   var camera = new T.PerspectiveCamera(38, 1, 0.3, 2500);
   var hemi = new T.HemisphereLight(0xffffff, 0x888888, 0.75); scene.add(hemi);
   var sun = new T.DirectionalLight(0xffffff, 0.75); sun.castShadow = true;
-  sun.shadow.mapSize.set(2048, 2048); var sc = sun.shadow.camera; sc.left = -70; sc.right = 70; sc.top = 70; sc.bottom = -70; sc.near = 10; sc.far = 400;
+  sun.shadow.mapSize.set(QUALITY[quality].shadow || 512, QUALITY[quality].shadow || 512); var sc = sun.shadow.camera; sc.left = -70; sc.right = 70; sc.top = 70; sc.bottom = -70; sc.near = 10; sc.far = 400;
   sun.shadow.bias = -0.0008; scene.add(sun); scene.add(sun.target);
   var env = { tod: 0.62, fog: 0.15, rain: false, wet: 0 }, ENV0 = Object.assign({}, env);      // time of day 0..1 (0.5 = noon), fog 0..1
   function applyEnv() {
+    invalidate();
     var dark = isDark(), day = Math.sin(Math.PI * clamp(env.tod, 0, 1)), night = 1 - day;
     var bg = PAL["sc-bg"].clone().lerp(new T.Color(dark ? 0x05070a : 0x2a3340), night * (dark ? 0.6 : 0.55));
     scene.background.copy(bg);
@@ -65,6 +81,7 @@
   var rig = { tx: -30, ty: 0, tz: 2, dist: 72, yaw: 2.72, pitch: 0.6, follow: true, fp: null };
   var tween = null;
   function camTo(p, dur) {
+    invalidate();
     var from = { tx: rig.tx, ty: rig.ty, tz: rig.tz, dist: rig.dist, yaw: rig.yaw, pitch: rig.pitch };
     var to = Object.assign({}, from, p);
     var dy = to.yaw - from.yaw; dy = Math.atan2(Math.sin(dy), Math.cos(dy)); to.yaw = from.yaw + dy;
@@ -568,7 +585,7 @@
   var stLabels = [];
   function buildST(t, Rr) {
     var f = Math.floor(t / DT); if (Math.abs(f - stLastF) < 3) return; stLastF = f;
-    while (stGroup.children.length) { var c = stGroup.children.pop(); c.geometry.dispose(); }
+    while (stGroup.children.length) { var c = stGroup.children[0]; stGroup.remove(c); c.geometry.dispose(); }
     var ego = pose(Rr, EGO_I, t);
     for (var i = 0; i < NA; i++) {
       var a = ACT[i], p0 = pose(Rr, i, t); if (Math.hypot(p0.x - ego.x, p0.z - ego.z) > 75) continue;
@@ -577,18 +594,20 @@
       if (pts[0].distanceTo(pts[pts.length - 1]) < 0.01) pts[pts.length - 1].x += 0.01;
       var curve = new T.CatmullRomCurve3(pts), rad = i === EGO_I ? 0.55 : a.kind === "ped" ? 0.45 : a.kind === "bus" ? 1.25 : 0.95;
       var m = i === EGO_I ? stMats.teal : a.kind === "ped" ? stMats.ped : stMats.purple;
-      stGroup.add(new T.Mesh(new T.TubeGeometry(curve, 48, rad, 10, false), m));
+      stGroup.add(new T.Mesh(new T.TubeGeometry(curve, QUALITY[quality].tube, rad, QUALITY[quality].radial, false), m));
     }
     stGrid.position.set(ego.x, 0, ego.z); stGrid.scale.set(1, 1, 1);
   }
 
   // ---------------------------------------------------------------- collision markers
   var hitRings = [];
+  var hitRingGeo = new T.TorusGeometry(2.6, 0.12, 8, 40).rotateX(Math.PI / 2);
+  var hitRingMats = { block: mat("gold", { transparent: true, opacity: 0.9 }, T.MeshBasicMaterial), hit: mat("red", { transparent: true, opacity: 0.9 }, T.MeshBasicMaterial) };
   function evWord(ev) { return ev.kind === "block" ? "chặn lối" : "va chạm"; }     // a block: the ego stopped on the crosswalk in a pedestrian's way
   function rebuildHits() {
     hitRings.forEach(function (o) { scene.remove(o); }); hitRings = [];
     R.events.forEach(function (ev) {
-      var m = new T.Mesh(new T.TorusGeometry(2.6, 0.12, 8, 40).rotateX(Math.PI / 2), mat(ev.kind === "block" ? "gold" : "red", { transparent: true, opacity: 0.9 }, T.MeshBasicMaterial));
+      var m = new T.Mesh(hitRingGeo, ev.kind === "block" ? hitRingMats.block : hitRingMats.hit);
       m.position.set(ev.x, 0.3, ev.z); m.userData.ev = ev; m.visible = false; scene.add(m); hitRings.push(m);
     });
     drawTicks();
@@ -630,10 +649,11 @@
     varGhost.visible = false; scene.add(varGhost);
     colorGhosts(); onTheme.push(colorGhosts);
   }
-  function colorGhosts() { if (!varGhost) return; VAR.forEach(function (v, i) { varGhost.setColorAt(i, PAL[OUT_COL[v.out]]); }); varGhost.instanceColor.needsUpdate = true; }
+  function colorGhosts() { if (!varGhost) return; VAR.forEach(function (v, i) { varGhost.setColorAt(i, PAL[OUT_COL[v.out]]); }); varGhost.instanceColor.needsUpdate = true; invalidate(); }
+  var ghostTransform = new T.Object3D();
   function updateGhosts(t) {
     if (!varGhost || !st.variants) { if (varGhost) varGhost.visible = false; return; }
-    var c2 = ACT.findIndex(function (a) { return a.id === "C2"; }), o = new T.Object3D();
+    var c2 = ACT.findIndex(function (a) { return a.id === "C2"; }), o = ghostTransform;
     VAR.forEach(function (v, i) { var q = pose(v.R, c2, t); o.position.set(q.x, 0.8, q.z); o.rotation.set(0, Math.atan2(-q.hz, q.hx), 0); o.scale.set(4.5, 1.4, 1.86); o.updateMatrix(); varGhost.setMatrixAt(i, o.matrix); });
     varGhost.instanceMatrix.needsUpdate = true; varGhost.visible = true;
   }
@@ -886,7 +906,7 @@
     bodyEl.scrollTop = 0; $("toast").hidden = true; toastT = 0;
     bind(c);
     setFollow(true); rig.lead = c.cam.lead || 0; camTo({ dist: c.cam.dist, yaw: c.cam.yaw, pitch: c.cam.pitch });
-    if (c.key === "real2sim") { reconstruct(function () { var pb = $("recProg"); if (pb) pb.textContent = "bản tái dựng: " + Math.round(REC.P.length / 3).toLocaleString("vi-VN") + " splat từ " + recPath.length + " vị trí quét trên log"; }); }
+    if (c.key === "real2sim") { reconstruct(function () { var pb = $("recProg"); if (pb) pb.textContent = "bản tái dựng: " + Math.round(REC.P.length / 3).toLocaleString("vi-VN") + " splat từ " + recPath.length + " vị trí quét trên log"; invalidate(); }); }
     if (c.key === "scenarios") computeVariants(function () { drawVarGrid(); var b = $("varProg"); if (b) b.textContent = "Bấm một ô để chạy kịch bản đó."; });
     if (c.key !== "sensors") lidarClear();
     stLastF = -99;
@@ -933,7 +953,7 @@
       var v = VAR.find(function (x) { return x.t0 === +b.dataset.t0 && x.dur === +b.dataset.d; }); st.variant = v; setRun(v.R); st.t = Math.max(0, v.t0 - 1.5); st.playing = true; drawVarGrid(); }); });
   }
   function setMode(m) { st.mode = m; if (!st.variant) setRun(RUN[m]); }
-  function setRun(Rr) { R = Rr; TRK = {}; lastPF = -1; stLastF = -99; rebuildHits(); }
+  function setRun(Rr) { R = Rr; TRK = {}; lastPF = -1; stLastF = -99; rebuildHits(); roTick = 0; invalidate(); }
   function setFollow(on) { rig.follow = on; var b = $("camBtn"); b.setAttribute("aria-pressed", on); b.textContent = on ? "theo xe" : "tự do"; }
 
   // ---------------------------------------------------------------- chapter 9: the lab's own runs, re-simulated here
@@ -1204,11 +1224,12 @@
     function row(k, v) { return "<span>" + k + "</span><b>" + v + "</b>"; }
     var me = stuEgoEvents(STU.R)[0], gh = stuEgoEvents(STU.ghost)[0], others = STU.R.events.filter(function (e) { return e.a !== "ego" && e.b !== "ego"; });
     var ep = pose(STU.R, EGO_I, t), hz = STU.R.actors.filter(function (a) { return a.hz != null; }).length;
-    el.innerHTML = row(STU.drive ? "bạn lái" : "planner", me ? '<span class="c-red">' + evWord(me) + ' ' + who(me.a === "ego" ? me.b : me.a) + " · " + fmt(me.t) + " s</span>" : '<span class="c-green">không va chạm</span>') +
+    var html = row(STU.drive ? "bạn lái" : "planner", me ? '<span class="c-red">' + evWord(me) + ' ' + who(me.a === "ego" ? me.b : me.a) + " · " + fmt(me.t) + " s</span>" : '<span class="c-green">không va chạm</span>') +
       row(STU.drive ? "planner, cùng thế giới" : "planner gốc", gh ? evWord(gh) + " " + who(gh.a === "ego" ? gh.b : gh.a) + " · " + fmt(gh.t) + " s" : "không va chạm") +
       row("va chạm giữa xe khác", others.length ? others.map(function (e) { return who(e.a) + "–" + who(e.b); }).slice(0, 3).join(", ") : "không") +
       row("tốc độ xe ta lúc này", fmt(ep.v * 3.6, 0) + " km/h") +
       row("rắc rối đang có", hz + STU.hazards.filter(function (h) { return h.type === "brake"; }).length + " / 4");
+    if (el.innerHTML !== html) el.innerHTML = html;
   }
   function stuLabels(t) {
     if (!STU.R) return;
@@ -1286,11 +1307,45 @@
   function toast(msg) { var el = $("toast"); el.textContent = msg; el.hidden = false; toastT = performance.now() + 3200; }
 
   // ================================================================== frame loop
-  function resize() { var w = stage.clientWidth, h = stage.clientHeight; renderer.setSize(w, h, false); camera.aspect = w / Math.max(1, h); camera.updateProjectionMatrix(); }
+  function resize() {
+    var w = Math.max(1, stage.clientWidth), h = Math.max(1, stage.clientHeight), q = QUALITY[quality];
+    renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, q.dpr, Math.sqrt(q.pixels / (w * h))));
+    renderer.setSize(w, h, false); camera.aspect = w / h; camera.updateProjectionMatrix();
+    invalidate();
+  }
+  function setQuality(value) {
+    if (!QUALITY[value]) return;
+    quality = value; var q = QUALITY[quality];
+    renderer.shadowMap.enabled = !!q.shadow;
+    if (sun.shadow.map) { sun.shadow.map.dispose(); sun.shadow.map = null; }
+    sun.shadow.mapSize.set(q.shadow || 512, q.shadow || 512);
+    scene.traverse(function (o) { if (o.material) { (Array.isArray(o.material) ? o.material : [o.material]).forEach(function (m) { m.needsUpdate = true; }); } });
+    stLastF = -99; $("quality").value = quality;
+    try { localStorage.setItem("scenario-3d-quality", quality); } catch (e) {}
+    resize();
+  }
+  $("quality").value = quality;
+  $("quality").addEventListener("change", function (e) { setQuality(e.target.value); });
   window.addEventListener("resize", resize);
+  // Wake after controls or camera input, including programmatically dispatched events.
+  ["click", "input", "change", "pointerdown", "pointermove", "pointerup", "wheel", "keydown", "keyup"].forEach(function (type) {
+    document.addEventListener(type, function (e) {
+      if (type === "pointermove" && !e.buttons) return;
+      roTick = 0; invalidate();
+    }, { passive: type !== "keydown" && type !== "keyup" });
+  });
+  document.addEventListener("visibilitychange", function () {
+    if (raf) cancelAnimationFrame(raf); raf = 0;
+    if (!document.hidden) invalidate();
+  });
   var last = performance.now(), wheelRot = new Float32Array(NA), lastT = st.t;
   function frame(now) {
-    var dtReal = Math.min(0.05, (now - last) / 1000); last = now;
+    raf = 0;
+    if (document.hidden) return;
+    // Align to browser vsync, skipping work between the chosen frame deadlines.
+    if (!dirty && now - last < 1000 / QUALITY[quality].fps - 1) { raf = requestAnimationFrame(frame); return; }
+    var cpuStart = performance.now(); dirty = false;
+    var dtReal = Math.min(0.25, Math.max(0, (now - last) / 1000)); last = now;
     var prevT = st.t;
     if (st.playing) { st.t += dtReal * st.speed; if (st.t >= T_END) { st.t = 0; TRK = {}; lastPF = -1; } }
     var t = st.t;
@@ -1348,7 +1403,11 @@
     chapterReadouts(t, ego);
     renderer.render(scene, camera);
     flushLabels();
-    requestAnimationFrame(frame);
+    perf.frames++; perf.cpuMs += performance.now() - cpuStart;
+    var settling = rig.follow && !rig.fp && (Math.abs(rig.tx - ego.x - (rig.lead || 0)) + Math.abs(rig.tz - ego.z) + Math.abs(rig.ty) > 0.01);
+    if (dirty || st.playing || tween || settling || st.lidar || env.rain || toastT) {
+      raf = requestAnimationFrame(frame);
+    }
   }
   var roTick = 0;
   function chapterReadouts(t, ego) {
@@ -1391,6 +1450,8 @@
   go(start); syncPlay();
   var e0 = pose(R, EGO_I, st.t); rig.tx = e0.x + 18; rig.tz = e0.z;
   if (!REDUCED && start === 0) { rig.dist = 260; rig.pitch = 1.35; rig.yaw = 2.2; camTo({ dist: CH[0].cam.dist, yaw: CH[0].cam.yaw, pitch: CH[0].cam.pitch }, 3600); }
-  requestAnimationFrame(frame);
-  window.__vlms = { st: st, go: go, rig: rig, env: env, applyEnv: applyEnv, get R() { return R; }, get PLAN() { return PLAN; }, get PRED() { return PRED; } };
+  ready = true; invalidate();
+  window.__vlms = { st: st, go: go, rig: rig, env: env, applyEnv: applyEnv, invalidate: invalidate, setQuality: setQuality,
+    get quality() { return quality; }, get perf() { return { frames: perf.frames, cpuMs: perf.cpuMs, pixels: renderer.domElement.width * renderer.domElement.height, drawCalls: renderer.info.render.calls, shadows: renderer.shadowMap.enabled }; },
+    get R() { return R; }, get PLAN() { return PLAN; }, get PRED() { return PRED; } };
 })();
